@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  RELEASED
+}
+
+enum ReleaseReason {
+  USER_CANCELLED
+  EXPIRED
+  PAYMENT_FAILED
+  NONE
+}
+
+model Product {
+  id          String            @id @default(cuid())
+  sku         String            @unique
+  name        String
+  description String?
+  stocks      InventoryStock[]
+  reservations Reservation[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@map("products")
+}
+
+model Warehouse {
+  id          String            @id @default(cuid())
+  code        String            @unique
+  name        String
+  city        String
+  stocks      InventoryStock[]
+  reservations Reservation[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@map("warehouses")
+}
+
+model InventoryStock {
+  id            String    @id @default(cuid())
+  productId     String
+  warehouseId   String
+  totalUnits    Int       @default(0)
+  reservedUnits Int       @default(0)
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([productId, warehouseId])
+  @@map("inventory_stocks")
+}
+
+model Reservation {
+  id            String             @id @default(cuid())
+  productId     String
+  warehouseId   String
+  quantity      Int
+  status        ReservationStatus  @default(PENDING)
+  releaseReason ReleaseReason      @default(NONE)
+  expiresAt     DateTime
+  confirmedAt   DateTime?
+  releasedAt    DateTime?
+  product       Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse     Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([productId, warehouseId])
+  @@map("reservations")
+}
+
+model IdempotencyRecord {
+  id            String   @id @default(cuid())
+  operation     String
+  idempotencyKey String
+  statusCode    Int
+  responseBody  Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([operation, idempotencyKey])
+  @@map("idempotency_records")
+}

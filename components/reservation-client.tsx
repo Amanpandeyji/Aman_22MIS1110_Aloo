@@ -20,7 +20,7 @@ function formatTime(ms: number) {
 export function ReservationClient({ reservation: initialReservation }: Props) {
   const router = useRouter();
   const [reservation, setReservation] = useState(initialReservation);
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -29,25 +29,51 @@ export function ReservationClient({ reservation: initialReservation }: Props) {
     return () => window.clearInterval(timer);
   }, []);
 
-  const remainingMs = useMemo(() => new Date(reservation.expiresAt).getTime() - now, [reservation.expiresAt, now]);
-  const isExpired = reservation.status === 'PENDING' && remainingMs <= 0;
+  const remainingMs = useMemo(() => {
+    if (now === null) {
+      return null;
+    }
+
+    return new Date(reservation.expiresAt).getTime() - now;
+  }, [reservation.expiresAt, now]);
+
+  const isExpired = reservation.status === 'PENDING' && remainingMs !== null && remainingMs <= 0;
+  const expiresAtUtc = reservation.expiresAt.replace('T', ' ').replace('.000Z', ' UTC');
 
   async function postAction(path: string, body?: unknown) {
     setMessage(null);
-    const response = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: body ? JSON.stringify(body) : '{}'
-    });
+    let response: Response;
 
-    const data = (await response.json()) as { message?: string; reservation?: ReservationView };
+    try {
+      response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : '{}'
+      });
+    } catch {
+      setMessage('Network error. Please try again.');
+      return false;
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    const raw = await response.text();
+    let data: { message?: string; reservation?: ReservationView } = {};
+
+    if (raw && contentType.includes('application/json')) {
+      try {
+        data = JSON.parse(raw) as { message?: string; reservation?: ReservationView };
+      } catch {
+        data = {};
+      }
+    }
+
     if (data.reservation) {
       setReservation(data.reservation);
       startTransition(() => router.refresh());
     }
 
     if (!response.ok) {
-      setMessage(data.message ?? 'The reservation request failed.');
+      setMessage(data.message ?? `The reservation request failed (${response.status}).`);
       return false;
     }
 
@@ -71,7 +97,7 @@ export function ReservationClient({ reservation: initialReservation }: Props) {
           <div className="rounded-2xl border border-white/10 bg-slate-950/55 p-4">
             <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Expires in</div>
             <div className={clsx('mt-2 text-lg font-medium', isExpired ? 'text-rose-300' : 'text-white')}>
-              {isExpired ? 'expired' : formatTime(remainingMs)}
+              {remainingMs === null ? '--:--' : isExpired ? 'expired' : formatTime(remainingMs)}
             </div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-slate-950/55 p-4">
@@ -136,8 +162,8 @@ export function ReservationClient({ reservation: initialReservation }: Props) {
             <dd className="mt-1 text-white">{reservation.warehouse.name}</dd>
           </div>
           <div>
-            <dt className="text-slate-400">Expiry time</dt>
-            <dd className="mt-1 text-white">{new Date(reservation.expiresAt).toLocaleString()}</dd>
+            <dt className="text-slate-400">Expiry time (UTC)</dt>
+            <dd className="mt-1 text-white">{expiresAtUtc}</dd>
           </div>
           <div>
             <dt className="text-slate-400">Release reason</dt>

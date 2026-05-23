@@ -63,6 +63,20 @@ function hashLockKey(value: string) {
   return BigInt.asIntN(63, BigInt(`0x${digest}`));
 }
 
+function getDbSchema() {
+  try {
+    return new URL(process.env.DATABASE_URL ?? '').searchParams.get('schema') ?? 'public';
+  } catch {
+    return 'public';
+  }
+}
+
+const dbSchema = getDbSchema().replace(/"/g, '""');
+const inventoryStocksTable = Prisma.raw(`"${dbSchema}"."inventory_stocks"`);
+const reservationsTable = Prisma.raw(`"${dbSchema}"."reservations"`);
+const productsTable = Prisma.raw(`"${dbSchema}"."products"`);
+const warehousesTable = Prisma.raw(`"${dbSchema}"."warehouses"`);
+
 function reservationView(row: {
   id: string;
   quantity: number;
@@ -244,7 +258,7 @@ export async function reserveInventory(input: {
 
       const lockRows = await tx.$queryRaw<Array<{ id: string; totalUnits: number; reservedUnits: number }>>
         `SELECT id, "totalUnits", "reservedUnits"
-         FROM "inventory_stocks"
+         FROM ${inventoryStocksTable}
          WHERE "productId" = ${input.productId} AND "warehouseId" = ${input.warehouseId}
          FOR UPDATE`;
 
@@ -317,9 +331,9 @@ async function lockReservation(tx: Prisma.TransactionClient, id: string) {
         r."releasedAt",
         jsonb_build_object('id', p.id, 'sku', p.sku, 'name', p.name) AS product,
         jsonb_build_object('id', w.id, 'code', w.code, 'name', w.name, 'city', w.city) AS warehouse
-      FROM "reservations" r
-      INNER JOIN "products" p ON p.id = r."productId"
-      INNER JOIN "warehouses" w ON w.id = r."warehouseId"
+      FROM ${reservationsTable} r
+      INNER JOIN ${productsTable} p ON p.id = r."productId"
+      INNER JOIN ${warehousesTable} w ON w.id = r."warehouseId"
       WHERE r.id = ${id}
       FOR UPDATE`;
 

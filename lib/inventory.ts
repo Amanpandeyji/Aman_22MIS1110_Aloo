@@ -76,6 +76,10 @@ const inventoryStocksTable = Prisma.raw(`"${dbSchema}"."inventory_stocks"`);
 const reservationsTable = Prisma.raw(`"${dbSchema}"."reservations"`);
 const productsTable = Prisma.raw(`"${dbSchema}"."products"`);
 const warehousesTable = Prisma.raw(`"${dbSchema}"."warehouses"`);
+const transactionOptions = {
+  maxWait: 10_000,
+  timeout: 20_000
+} as const;
 
 function reservationView(row: {
   id: string;
@@ -142,59 +146,94 @@ export async function cleanupExpiredReservationsTx(tx: Prisma.TransactionClient)
 }
 
 export async function cleanupExpiredReservations() {
-  return db.$transaction(async (tx) => cleanupExpiredReservationsTx(tx));
+  return db.$transaction(async (tx) => cleanupExpiredReservationsTx(tx), transactionOptions);
+}
+
+async function safeCleanupExpiredReservations() {
+  try {
+    return await cleanupExpiredReservations();
+  } catch (error) {
+    console.warn('Skipping expired reservation cleanup after a database error.', error);
+    return 0;
+  }
+}
+
+async function safeCleanupExpiredReservationsTx(tx: Prisma.TransactionClient) {
+  try {
+    return await cleanupExpiredReservationsTx(tx);
+  } catch (error) {
+    console.warn('Skipping expired reservation cleanup inside transaction.', error);
+    return 0;
+  }
 }
 
 export async function getCatalog(): Promise<CatalogProduct[]> {
-  await cleanupExpiredReservations();
+  try {
+    await safeCleanupExpiredReservations();
 
-  const products = await db.product.findMany({
-    orderBy: { name: 'asc' },
-    include: {
-      stocks: {
-        include: { warehouse: true },
-        orderBy: { warehouse: { name: 'asc' } }
+    const products = await db.product.findMany({
+      orderBy: { name: 'asc' },
+      include: {
+        stocks: {
+          include: { warehouse: true },
+          orderBy: { warehouse: { name: 'asc' } }
+        }
       }
-    }
-  });
+    });
 
-  return products.map((product) => ({
-    id: product.id,
-    sku: product.sku,
-    name: product.name,
-    description: product.description,
-    warehouses: product.stocks.map((stock) => ({
-      warehouseId: stock.warehouseId,
-      warehouseCode: stock.warehouse.code,
-      warehouseName: stock.warehouse.name,
-      city: stock.warehouse.city,
-      totalUnits: stock.totalUnits,
-      reservedUnits: stock.reservedUnits,
-      availableUnits: stock.totalUnits - stock.reservedUnits
-    }))
-  }));
+    return products.map((product) => ({
+      id: product.id,
+      sku: product.sku,
+      name: product.name,
+      description: product.description,
+      warehouses: product.stocks.map((stock) => ({
+        warehouseId: stock.warehouseId,
+        warehouseCode: stock.warehouse.code,
+        warehouseName: stock.warehouse.name,
+        city: stock.warehouse.city,
+        totalUnits: stock.totalUnits,
+        reservedUnits: stock.reservedUnits,
+        availableUnits: stock.totalUnits - stock.reservedUnits
+      }))
+    }));
+  } catch (error) {
+    console.error('Unable to load catalog, returning an empty list.', error);
+    return [];
+  }
 }
 
 export async function listWarehouses() {
-  await cleanupExpiredReservations();
+  try {
+    await safeCleanupExpiredReservations();
 
-  return db.warehouse.findMany({
-    orderBy: { name: 'asc' }
-  });
+    return await db.warehouse.findMany({
+      orderBy: { name: 'asc' }
+    });
+  } catch (error) {
+    console.error('Unable to load warehouses, returning an empty list.', error);
+    return [];
+  }
 }
 
 export async function getReservationById(id: string): Promise<ReservationView | null> {
-  const reservation = await db.reservation.findUnique({
-    where: { id },
-    include: {
-      product: {
-        select: { id: true, sku: true, name: true }
-      },
-      warehouse: {
-        select: { id: true, code: true, name: true, city: true }
+  let reservation;
+
+  try {
+    reservation = await db.reservation.findUnique({
+      where: { id },
+      include: {
+        product: {
+          select: { id: true, sku: true, name: true }
+        },
+        warehouse: {
+          select: { id: true, code: true, name: true, city: true }
+        }
       }
-    }
-  });
+    });
+  } catch (error) {
+    console.error('Unable to load reservation, treating it as missing.', error);
+    return null;
+  }
 
   if (!reservation) {
     return null;
@@ -254,7 +293,7 @@ export async function reserveInventory(input: {
 }): Promise<ApiResult<MutationBody>> {
   return db.$transaction(async (tx) => {
     return withIdempotency<MutationBody>(tx, 'reserve', input.idempotencyKey, async () => {
-      await cleanupExpiredReservationsTx(tx);
+      await safeCleanupExpiredReservationsTx(tx);
 
       const lockRows = await tx.$queryRaw<Array<{ id: string; totalUnits: number; reservedUnits: number }>>
         `SELECT id, "totalUnits", "reservedUnits"
@@ -302,7 +341,7 @@ export async function reserveInventory(input: {
         body: { reservation: reservationView(reservation) }
       };
     });
-  });
+  }, transactionOptions);
 }
 
 async function lockReservation(tx: Prisma.TransactionClient, id: string) {
@@ -431,7 +470,7 @@ export async function confirmReservation(input: {
         body: { reservation: reservationView(confirmed) }
       };
     });
-  });
+  }, transactionOptions);
 }
 
 export async function releaseReservation(input: {
@@ -522,7 +561,7 @@ export async function releaseReservation(input: {
       statusCode: 200,
       body: { reservation: reservationView(released) }
     };
-  });
+  }, transactionOptions);
 }
 
 export function toCatalogSummary(products: CatalogProduct[]) {

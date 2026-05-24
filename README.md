@@ -117,6 +117,23 @@ npm run build
 
 If you want Vercel to run migrations automatically on deploy, add a pre-build step to call `npx prisma migrate deploy`, or run migrations manually before first deploy.
 
+### If the page is blank on Vercel
+
+If the homepage only shows the empty-state message, the deploy usually has one of these issues:
+
+1. `DATABASE_URL` or `DIRECT_URL` is missing or points at the wrong database.
+2. The Prisma migration was not applied to the hosted database.
+3. Seed data was never inserted into the same schema used by the app.
+
+Fix checklist:
+
+1. Confirm both Vercel env vars point to the same Neon database and include `schema=allo_inventory`.
+2. Run `npx prisma migrate deploy` against the hosted database.
+3. Run `npm run prisma:seed` once against that same database.
+4. Redeploy the Vercel app.
+
+If it still fails, check the Vercel function logs for `Unable to load catalog, returning an empty list.` That message means the database query failed and the real error needs to be fixed in the deployment config.
+
 ### Cron / expiry
 
 Use Vercel Cron (or any scheduler) to POST to `/api/cron/release-expired` with the `CRON_SECRET` header. The app also performs lazy cleanup during reads and writes so counts remain correct even if the cron job is delayed.

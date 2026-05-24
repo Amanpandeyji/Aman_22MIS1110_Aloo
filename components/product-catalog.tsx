@@ -134,7 +134,7 @@ export function ProductCatalog({ products }: Props) {
 
       {stockRows.length === 0 ? (
         <div className="rounded-3xl border border-white/10 bg-white/6 p-8 text-center text-slate-300">
-          Seed data has not been loaded yet.
+          No catalog data loaded yet. Check Vercel environment variables, run Prisma migrations, then seed the database.
         </div>
       ) : null}
     </div>
